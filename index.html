@@ -1,0 +1,374 @@
+<!doctype html>
+<html>
+<head>
+<script src="lib/three.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script src="lib/stats.js"></script>
+<meta charset="utf-8">
+</head>
+<body>
+<script>
+// speed of moving stuff: 30 second music clip, 60fps
+var SPEED = 0.0015;
+// distance at which the sprites appear.
+var HORIZON = -10;
+var camera = null;
+var idx, tex;
+var currentz = HORIZON;
+var current = [];
+var textures = null;
+var lastCurrentTime = 0;
+var p;
+var filterStrength = 20;
+var frameTime = 0, lastLoop = new Date, thisLoop;
+var currentMBID = 0;
+var nextMBID = 0;
+var justswitchedtune = false;
+  var ids = [
+    '0ef4ed28-a4ab-4596-b29b-03415413fef5',
+ //    'e8c47146-64a1-4d44-b496-be0938f92d28',
+ //    '4b770610-8bb6-4de4-8666-d1acb9940fe9',
+ //    '1f1a2ea9-f217-464d-83c8-5bb10b1c5f4b',
+ //    'e5b02066-1fbd-4872-b4cd-4df578ec6c2f',
+ //    '5c0489fc-6dd8-4dc1-a0dc-b742fde1b3f8',
+ //    '8b23d96e-b682-42d7-90ac-c1511a268b51'
+  ];
+  var trackIndex = 0;
+  var tracks = [
+   72549484,
+   69910347,
+   71265932,
+   60815553,
+   10201454
+  ]
+function doIt(id) {
+  stats = new Stats();
+  stats.domElement.style.position = 'absolute';
+  stats.domElement.style.bottom = '0px';
+  stats.domElement.style.zIndex = 100;
+  document.body.appendChild( stats.domElement );
+  var GRID_WIDTH = 20;
+  var GRID_HEIGHT = 20;
+  currentMBID = ids[0];
+  textures = [];
+  function loadTexFromUUID(uuid) {
+    var textureset = {};
+    var mosaic = null;
+    console.log("loading normal :  http://192.168.0.116:8080/image/" + uuid)
+    var normal = THREE.ImageUtils.loadTexture("http://192.168.0.116:8080/image/" + uuid, THREE.UVMapping, function() {
+      mosaic = THREE.ImageUtils.loadTexture("http://192.168.0.116:8080/mosaic/" + uuid + "/500/20", THREE.UVMapping, function () {
+        console.log("mosaic loaded.");
+        textureset.mosaic = new THREE.MeshBasicMaterial({ map: mosaic, color: 0xffffff, fog: true });
+        textureset.mosaic.transparent = true;
+        textureset.mosaic.opacity = 0.4;
+        textureset.mosaic.depthWrite = true;
+        textureset.mosaic.combine = THREE.MixOperation;
+      });
+      console.log("normal cover art loaded.");
+    });
+    textureset.normal = new THREE.MeshBasicMaterial({ map: normal, color: 0xffffff, fog: true });
+    textureset.normal.transparent = true;
+    textureset.normal.opacity = 1.0;
+    textureset.normal.depthWrite = true;
+    textureset.normal.combine = THREE.MixOperation;
+    textures[uuid] = textureset;
+  }
+  for (var i = 0; i < ids.length; i++) {
+    loadTexFromUUID(ids[i]);
+  }
+  // Get the next
+  function getNext(callback) {
+    var xhr = new XMLHttpRequest();
+    var _this = this;
+    xhr.addEventListener("readystatechange", function (e) {
+      if (xhr.readyState == 4) {
+        if (xhr.status == 200) {
+          callback(xhr.responseText);
+        }
+      }
+    });
+    xhr.open("GET", "http://192.168.0.116:8080/next/"+ currentMBID + "/" + "500" + "/" + 20 + "/" + 230 + "/" + 230, true);
+    xhr.send(null);
+  }
+  var scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera.position.z = 0;
+  var renderer = new THREE.WebGLRenderer();
+  renderer.setBlending(THREE.MultiplyBlending);
+  renderer.gammaInput = true;
+  renderer.gammaOutput = true;
+  controls = new THREE.OrbitControls(camera);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+  function addSpriteInternal(tex) {
+    var inity = -10;
+    for (var i = 0; i < GRID_WIDTH; i++) {
+      var initx = -10;
+      for (var j = 0; j < GRID_HEIGHT; j++) {
+        var geometry = new THREE.PlaneGeometry( 1, 1 );
+        var sp = new THREE.Mesh(geometry, tex);
+        // var sp = new THREE.Sprite(tex);
+        // sp.position.z = HORIZON;
+        sp.position.x = initx;
+        sp.position.y = inity;
+        initx++;
+        scene.add(sp);
+        current.push(sp);
+      }
+      inity++;
+    }
+  };
+  tex = textures[currentMBID].normal;
+  addSpriteInternal(tex);
+  getNext(function(uuid) {
+    nextMBID = uuid;
+    loadTexFromUUID(uuid);
+  });
+  function switchSprite() {
+    addSpriteInternal(textures[currentMBID].mosaic);
+  }
+  var array = new Float32Array(GRID_WIDTH);
+  var ac = new AudioContext();
+  var analyser = ac.createAnalyser();
+  analyser.frequencyBinCount = GRID_WIDTH;
+  analyser.connect(ac.destination);
+  var switched = false;
+  function render() {
+    var first = Date.now();
+    // console.log(p.remaining());
+    // quick, load the next song.
+    p.updateCurrentPrev();
+    // if (p.remaining() < 20 && !p.queued()) {
+    //   console.log("loading new");
+    //   p.chainTo(3135557);
+    // }
+    stats.begin();
+    requestAnimationFrame(render);
+    analyser.getFloatFrequencyData(array);
+    currentz += SPEED;
+    var middletilez = 0;
+    for (var i = 0; i < GRID_WIDTH * GRID_HEIGHT; i++) {
+      var x = i % GRID_WIDTH;
+      var y = Math.floor(i / GRID_HEIGHT);
+      var centerx = GRID_WIDTH / 2;
+      var centery = GRID_HEIGHT / 2;
+      var dx = centerx - x;
+      var dy = centery - y;
+      var dist = Math.floor(Math.sqrt(dx * dx + dy * dy));
+      var sp = -(array[dist] - analyser.minDecibels) / analyser.maxDecibels;
+      current[i].position.z = currentz + sp * 2;
+      if (current.length > GRID_WIDTH * GRID_HEIGHT) {
+        current[i + GRID_WIDTH + GRID_HEIGHT].position.z = currentz + sp * 2 - 0.1;
+      }
+      if (dist < 1) {
+        middletilez = current[i].position.z;
+      }
+    }
+    var f = current[0];
+    // console.log(currentz);
+    // when we reach -8, we switch to the mosaic if we can
+    if (currentz > -8) {
+      // transparency transition
+      if (current.length > GRID_WIDTH * GRID_HEIGHT) {
+        console.log("opacity: " + current[0].material.opacity);
+        current[0].material.opacity -= 0.1;
+        current[0].material.needsUpdate = true;
+        current[current.length / 2].material.opacity += 0.1;
+        current[current.length / 2].material.needsUpdate = true;
+        if (current[0].material.opacity < 0.01 && current.length > GRID_WIDTH * GRID_HEIGHT) {
+          console.log("removing");
+          for (var i = 0; i < current.length / 2; i++) {
+            scene.remove(current[i]);
+          }
+          current = current.slice(current.length / 2);
+        }
+      }
+      if (!switched && textures[currentMBID].mosaic) {
+        console.log("switching at " + currentz);
+        switched = true;
+        switchSprite();
+        getNext(function(uuid) {
+          nextMBID = uuid;
+          loadTexFromUUID(uuid);
+        })
+      }
+    }
+    if (middletilez > camera.position.z || justswitchedtune) {
+      console.log("newtiles");
+      current.forEach(function(e) { scene.remove(e) });
+      current = [];
+      currentz = HORIZON;
+      switched = false;
+      idx = Math.floor(Math.random() * textures.length);
+      // console.log(textures[idx])
+      currentMBID = nextMBID;
+      tex = textures[currentMBID].normal;
+      addSpriteInternal(tex);
+    }
+    controls.update();
+    renderer.render(scene, camera);
+    stats.end();
+    var thisFrameTime = (thisLoop=new Date) - lastLoop;
+    frameTime+= (thisFrameTime - frameTime) / filterStrength;
+    lastLoop = thisLoop;
+    // console.log("fps: " + (1000 / frameTime));
+    // mmmmmeeeeehhhh.
+    // console.log(p.remaining() / (frameTime * 1000));
+    SPEED = (camera.position.z - middletilez) / ((p.remaining() * 1000) / frameTime);
+    // console.log(middletilez - camera.position.z + "speed: " + SPEED);
+  }
+  function DZPlayer(destNode) {
+    this.xhr = null;
+    this.xhr2 = null;
+    this.destNode = destNode;
+    this.currentSampleEndTime = 0;
+    this.currentBS = null;
+    this.currentGain = null;
+    this.currentBSStart = 0;
+    this.nextBS = null;
+    this.nextBSStart = Infinity;
+    this.nextGain = null;
+    this._queued = false;
+  }
+  DZPlayer.prototype.load = function(id, callback) {
+    this.xhr = new XMLHttpRequest();
+    this.xhr2 = new XMLHttpRequest();
+    var _this = this;
+    this.xhr.addEventListener("readystatechange", function (e) {
+      if (_this.xhr.readyState == 4) {
+        if (_this.xhr.status == 200) {
+          var json = JSON.parse(_this.xhr.response);
+          _this.xhr2.addEventListener("readystatechange", function (e) {
+            if (_this.xhr2.readyState == 4) {
+              if (_this.xhr2.status == 200) {
+                  _this.destNode.context.decodeAudioData(_this.xhr2.response, function(b) {
+                    callback(_this.connect.bind(_this)(b));
+                }, function() {
+                  console.log("error");
+                });
+              }
+            }
+          })
+          console.log(json);
+          var str = "http://127.0.0.1:9292/" + json.preview.replace("http://", "");
+          console.log(str);
+          _this.xhr2.open("GET", str, true);
+          _this.xhr2.responseType = 'arraybuffer';
+          _this.xhr2.send(null);
+        }
+      }
+    });
+    console.log("requesting id: " + id);
+    this.xhr.open("GET", "http://127.0.0.1:9292/api.deezer.com/track/" + id, true);
+    this.xhr.send(null);
+  }
+  DZPlayer.prototype.play = function() {
+    if (this.currentBSStart == 0) {
+      this.currentBSStart = this.currentBS.context.currentTime;
+    }
+    this.currentBS.start();
+  }
+  DZPlayer.prototype.connect = function(b) {
+    if (!this.currentBS) {
+      this.currentBS = this.destNode.context.createBufferSource();
+      this.currentBS.buffer = b;
+      this.currentGain = this.destNode.context.createGain();
+      this.currentBS.connect(this.currentGain);
+      this.currentGain.connect(this.destNode);
+      return this.currentBS;
+    } else {
+      this.nextBS = this.destNode.context.createBufferSource();
+      this.nextBS.buffer = b;
+      this.nextGain = this.destNode.context.createGain();
+      this.nextBS.connect(this.nextGain);
+      this.nextGain.connect(this.destNode);
+      // initialy silent
+      this.nextGain.gain.setValueAtTime(0.0, this.destNode.context.currentTime);
+      return this.nextBS;
+    }
+  }
+  DZPlayer.prototype.queued = function() {
+    return this._queued;
+  }
+  DZPlayer.prototype.updateCurrentPrev = function() {
+    if (this.currentBS.context.currentTime > this.nextBSStart) {
+      console.log("playing the new");
+      justswitchedtune = true;
+      this.currentBS = this.nextBS;
+      this.currentGain = this.nextGain;
+      this.currentBSStart = this.nextBSStart;
+      this.nextBS = null;
+      this.nextBSStart = Infinity;
+      this.nextGain = null;
+      this._queued = false;
+      // kick off the next song loading
+      this.chainTo(tracks[trackIndex++]);
+    } else {
+      justswitchedtune = false;
+    }
+  }
+  // 1.0: play the whole tune, 0.5: play half of it, etc.
+  var TUNE_LENGTH_RATIO = 1.0;
+  DZPlayer.prototype.remaining = function() {
+    // console.log(this.currentBSStart, this.currentBS.buffer.duration * TUNE_LENGTH_RATIO, this.currentBS.context.currentTime)
+    return this.currentBSStart + this.currentBS.buffer.duration * TUNE_LENGTH_RATIO - this.currentBS.context.currentTime;
+  }
+  var FADE = 1.0; // second
+  var TIMECONSTANT = 0.33;
+  DZPlayer.prototype.chainTo = function(id) {
+    this._queued = true;
+    var _this = this;
+    this.load(id, function (node) {
+      _this.nextBSStart = _this.currentBS.context.currentTime + _this.remaining() - FADE;
+      console.log("scheduling the next for " + _this.nextBSStart);
+      // fade in-out
+      _this.nextGain.gain.setTargetAtTime(1.0, _this.nextBSStart, TIMECONSTANT);
+      _this.currentGain.gain.setTargetAtTime(0.0, _this.nextBSStart, TIMECONSTANT);
+      node.start(_this.nextBSStart);
+    });
+  }
+  p = new DZPlayer(analyser);
+  p.load(id, function() {
+    p.play();
+    render(p);
+    p.chainTo(tracks[trackIndex++]);
+  });
+}
+window.onload = function() {
+  //document.querySelector("#doit").addEventListener("click", function() {
+    // doIt(document.querySelector("#tehid").value);
+  doIt(tracks[trackIndex++]);
+    document.querySelector("#landing").style.display = "none";
+//  });
+}
+</script>
+</body>
+<style>
+#title {
+  text-align: center;
+}
+#tehid {
+  position: absolute;
+  top: 50%;
+  left: calc(50% - 10em);
+  width: 20em;
+}
+#authors {
+  position: absolute;
+  bottom: 5%;
+  right: 5%;
+}
+</style>
+<div id=landing>
+  <h1 id=title>
+    The title
+  </h1>
+  <div class=aligner-item>
+    <input id=tehid></input>
+    <button id=doit>DO IT!</button>
+  </div>
+    <span id=authors>
+      The dudes
+    </span>
+</div>
+</html>
